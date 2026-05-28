@@ -647,7 +647,7 @@ async def on_startup():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://6a17a14982b803de207cad2f--delightful-torte-d07995.netlify.app", # Link do Netlify
+        "https://caixamercado.netlify.app/", # Link do Netlify
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://192.168.10.7:5173"
