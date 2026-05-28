@@ -96,6 +96,13 @@ body {
   }
 }
 
+@media  screen and (max-width: 768px) {
+.sidebar { 
+    display: none;
+}
+}
+
+
 /* Scrollbar styling */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: #FAFAFA; }
