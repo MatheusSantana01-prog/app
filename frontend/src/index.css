@@ -96,10 +96,26 @@ body {
   }
 }
 
-@media  screen and (max-width: 768px) {
-.sidebar { 
-    display: none;
-}
+/* Ajuste para telas de celular */
+@media screen and (max-width: 600px) {
+  .container-principal {
+    display: flex;
+    flex-direction: row;
+  }
+
+  .sidebar {
+    width: 60px; 
+    overflow: hidden; 
+  }
+
+  .sidebar span {
+    display: none; 
+  }
+
+  .conteudo-principal {
+    flex: 1; 
+    width: calc(100% - 60px);
+  }
 }
 
 
