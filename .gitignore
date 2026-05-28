@@ -1,0 +1,12 @@
+# --- BACKEND (Python) ---
+backend/.venv/
+backend/venv/
+backend/env/
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+
+# --- FRONTEND (React/Node) ---
+frontend/node_modules/
+frontend/dist/
+frontend/.env
