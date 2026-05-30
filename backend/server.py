@@ -647,7 +647,7 @@ async def on_startup():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://app-px74h42ei-matheussantana01-progs-projects.vercel.app"
+        "https://app-px74h42ei-matheussantana01-progs-projects.vercel.app",
         "https://caixamercado.netlify.app", # Link do Netlify
         "http://localhost:5173",
         "http://127.0.0.1:5173",
