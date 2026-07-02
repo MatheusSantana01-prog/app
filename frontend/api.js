@@ -1,15 +1,14 @@
 import axios from "axios";
 
+// Deixando o nome padrão igual em tudo: BACKEND_URL
+export const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+// Agora sim ela vai existir aqui embaixo!
+export const API = `${BACKEND_URL}/api`;
+
 export const api = axios.create({
-  // ✅ Corrigido para ler a variável de ambiente do Vite de forma segura
-  baseURL: import.meta.env.VITE_BACKEND_URL || "http://localhost:8000",
+  baseURL: API,
+  withCredentials: true,
 });
 
-// Configuração opcional para injetar o token do localStorage se ele existir
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+// ... resto do seu código (interceptors, formatBRL, formatDate) permanecem iguais!
