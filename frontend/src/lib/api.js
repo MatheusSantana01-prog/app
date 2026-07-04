@@ -1,6 +1,6 @@
 import axios from "axios";
 
-export const URL_BACKEND = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+export const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Criamos a rota com o prefixo /api que o seu FastAPI espera
 export const API = `${BACKEND_URL}/api`;
