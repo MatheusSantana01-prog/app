@@ -1,33 +1,37 @@
-import axios from "axios";
+import axios from 'axios';
 
-export const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
-// Criamos a rota com o prefixo /api que o seu FastAPI espera
-export const API = `${BACKEND_URL}/api`;
-
+// Cria a instância do Axios para se conectar ao backend FastAPI adicionando o prefixo /api
 export const api = axios.create({
-  baseURL: API, // <-- Aqui estava o segredo! Usando a variável com /api integrado
-  withCredentials: true,
+  baseURL: 'http://127.0.0.1:8000/api', 
 });
 
-// Mantém os seus interceptors idênticos
+// Adiciona o token de autenticação em cada requisição automaticamente
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
   return config;
 });
 
-// Mantém a sua função de formatar Moeda (R$)
-export function formatBRL(n) {
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  }).format(Number(n) || 0);
-}
+// Função utilitária para formatar valores em Real (R$)
+export const formatBRL = (value) => {
+  if (value === undefined || value === null) return 'R$ 0,00';
+  return Number(value).toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  });
+};
 
-// Mantém a sua função de formatar Data
-export function formatDate(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return d.toLocaleString("pt-BR");
-}
+// Função utilitária para formatar datas no padrão brasileiro
+export const formatDate = (dateString) => {
+  if (!dateString) return '-';
+  const date = new Date(dateString);
+  return date.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};

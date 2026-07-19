@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import Layout from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import POS from "./pages/POS";
+import Comandas from "./pages/Comandas"; // <-- 1. IMPORTAÇÃO ADICIONADA
 import Products from "./pages/Products";
 import Categories from "./pages/Categories";
 import Suppliers from "./pages/Suppliers";
@@ -49,6 +50,7 @@ function App() {
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="pdv" element={<POS />} />
+            <Route path="comandas" element={<Comandas />} /> {/* <-- 2. ROTA ADICIONADA */}
             <Route path="produtos" element={<Products />} />
             <Route path="categorias" element={<Categories />} />
             <Route path="fornecedores" element={<Suppliers />} />

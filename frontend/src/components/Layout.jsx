@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   ScanBarcode,
+  Utensils, // Ícone adicionado para as Comandas
   Package,
   Layers,
   Truck,
@@ -15,6 +16,7 @@ import {
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
   { to: "/pdv", label: "Frente de Caixa", icon: ScanBarcode, testid: "nav-pdv" },
+  { to: "/comandas", label: "Comandas (Bar)", icon: Utensils, testid: "nav-comandas" }, // <-- NOVA ROTA INCLUÍDA
   { to: "/produtos", label: "Produtos", icon: Package, testid: "nav-produtos" },
   { to: "/categorias", label: "Categorias", icon: Layers, testid: "nav-categorias" },
   { to: "/fornecedores", label: "Fornecedores", icon: Truck, testid: "nav-fornecedores" },

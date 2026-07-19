@@ -13,19 +13,35 @@ import logging
 import uuid
 import bcrypt
 import jwt
-import certifi  # <-- ADICIONADO: Importante para evitar o erro de SSL no Render
+import certifi  # Certificados SSL para o Render
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Literal
 
-# MongoDB---
+# MongoDB
 mongo_url = os.environ['MONGO_URL']
-# AJUSTE: Adicionado tlsCAFile para garantir o handshake SSL/TLS no ambiente Linux do Render
 client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
 db = client[os.environ['DB_NAME']]
 
-# Apenas UMA instância do app e do router aqui no topo
+# Instância do app
 app = FastAPI(title="Caixa de Mercado API")
+
+# O middleware fica aqui no topo
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "https://app-6nro.onrender.com",
+        "https://caixamercado.netlify.app", 
+        "http://192.168.10.7:5173"
+    ],  
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 api_router = APIRouter(prefix="/api")
 
 logger = logging.getLogger("api")
@@ -35,7 +51,6 @@ logging.basicConfig(level=logging.INFO)
 # AUTH HELPERS
 # =========================
 JWT_ALGORITHM = "HS256"
-
 
 def get_jwt_secret() -> str:
     return os.environ["JWT_SECRET"]
@@ -54,7 +69,6 @@ def create_access_token(user_id: str, email: str, role: str) -> str:
         "type": "access",
     }
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
-
 
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("access_token")
@@ -77,21 +91,17 @@ async def get_current_user(request: Request) -> dict:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Token inválido")
 
-
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Acesso restrito ao administrador")
     return user
 
-
-# Auxiliar para limpar o ObjectId do MongoDB antes de enviar ao FastAPI
 def mongo_to_dict(obj):
     if not obj:
         return obj
     if "_id" in obj:
         del obj["_id"]
     return obj
-
 
 # =========================
 # MODELS
@@ -182,7 +192,6 @@ class StockMovement(StockMovementIn):
     operator_name: str
     created_at: str
 
-# NOVOS MODELOS PARA MULTI-CAIXA
 class CashSessionOpen(BaseModel):
     caixa_numero: int
     initial_balance: float = Field(..., ge=0)
@@ -190,6 +199,31 @@ class CashSessionOpen(BaseModel):
 class CashSessionClose(BaseModel):
     final_balance_reported: float
 
+# =========================
+# MODELOS PARA COMANDAS (BAR)
+# =========================
+class ComandaItemIn(BaseModel):
+    product_id: str
+    quantity: float
+
+class ComandaIn(BaseModel):
+    customer_name: str
+
+class ComandaItemOut(BaseModel):
+    product_id: str
+    product_name: str
+    barcode: str
+    quantity: float
+    unit_price: float
+    total: float
+
+class ComandaOut(BaseModel):
+    id: str
+    customer_name: str
+    status: Literal["aberta", "paga", "cancelada"]
+    items: List[ComandaItemOut]
+    total_parcial: float
+    created_at: str
 
 # =========================
 # AUTH ROUTES
@@ -219,7 +253,6 @@ async def logout(response: Response, user: dict = Depends(get_current_user)):
 async def me(user: dict = Depends(get_current_user)):
     return user
 
-
 # =========================
 # CATEGORY CRUD
 # =========================
@@ -247,7 +280,6 @@ async def delete_category(cat_id: str, user: dict = Depends(require_admin)):
     await db.categories.delete_one({"id": cat_id})
     return {"ok": True}
 
-
 # =========================
 # SUPPLIER CRUD
 # =========================
@@ -274,7 +306,6 @@ async def update_supplier(sid: str, payload: SupplierIn, user: dict = Depends(re
 async def delete_supplier(sid: str, user: dict = Depends(require_admin)):
     await db.suppliers.delete_one({"id": sid})
     return {"ok": True}
-
 
 # =========================
 # PRODUCT CRUD
@@ -332,7 +363,6 @@ async def delete_product(pid: str, user: dict = Depends(require_admin)):
     await db.products.delete_one({"id": pid})
     return {"ok": True}
 
-
 # =========================
 # STOCK MOVEMENTS
 # =========================
@@ -353,7 +383,7 @@ async def create_movement(payload: StockMovementIn, user: dict = Depends(get_cur
         stock_after = stock_before - payload.quantity
         if stock_after < 0:
             raise HTTPException(400, "Estoque insuficiente")
-    else:  # ajuste -> quantidade absoluta
+    else:  # ajuste
         stock_after = payload.quantity
     await db.products.update_one({"id": payload.product_id}, {"$set": {"stock": stock_after}})
     doc = {
@@ -369,13 +399,11 @@ async def create_movement(payload: StockMovementIn, user: dict = Depends(get_cur
     await db.stock_movements.insert_one(doc.copy())
     return doc
 
-
 # =========================
 # CONTROLE DE CAIXA (SESSÕES)
 # =========================
 @api_router.get("/cash/status")
 async def get_cash_status(user: dict = Depends(get_current_user)):
-    """Verifica se o operador logado possui um caixa ativo aberto"""
     session = await db.cash_sessions.find_one({"operator_id": user["id"], "status": "aberto"})
     if not session:
         return {"active": False, "session": None}
@@ -383,12 +411,10 @@ async def get_cash_status(user: dict = Depends(get_current_user)):
 
 @api_router.post("/cash/open")
 async def open_cash_session(payload: CashSessionOpen, user: dict = Depends(get_current_user)):
-    # Verifica se o operador já tem um caixa aberto
     already_open = await db.cash_sessions.find_one({"operator_id": user["id"], "status": "aberto"})
     if already_open:
         raise HTTPException(status_code=400, detail=f"Você já possui o Caixa {already_open['caixa_numero']} aberto!")
 
-    # Verifica se o número do caixa está em uso por outra pessoa
     caixa_busy = await db.cash_sessions.find_one({"caixa_numero": payload.caixa_numero, "status": "aberto"})
     if caixa_busy:
         raise HTTPException(status_code=400, detail=f"O Caixa {payload.caixa_numero} já está aberto por {caixa_busy['operator_name']}.")
@@ -418,8 +444,6 @@ async def close_cash_session(payload: CashSessionClose, user: dict = Depends(get
         raise HTTPException(status_code=400, detail="Você não possui nenhuma sessão de caixa aberta para fechar.")
 
     closed_at = datetime.now(timezone.utc).isoformat()
-    
-    # Atualiza o caixa fechando o turno
     await db.cash_sessions.update_one(
         {"id": session["id"]},
         {"$set": {
@@ -428,10 +452,8 @@ async def close_cash_session(payload: CashSessionClose, user: dict = Depends(get
             "final_balance_reported": payload.final_balance_reported
         }}
     )
-    
     updated_session = await db.cash_sessions.find_one({"id": session["id"]})
     return {"detail": "Caixa fechado com sucesso!", "summary": mongo_to_dict(updated_session)}
-
 
 # =========================
 # SALES (INTEGRADO COM CAIXA)
@@ -441,12 +463,10 @@ async def create_sale(payload: SaleIn, user: dict = Depends(get_current_user)):
     if not payload.items:
         raise HTTPException(400, "Venda sem itens não é permitida")
 
-    # OBRIGA O CAIXA A ESTAR ABERTO PARA FAZER VENDA
     session = await db.cash_sessions.find_one({"operator_id": user["id"], "status": "aberto"})
     if not session:
         raise HTTPException(status_code=400, detail="Bloqueado: Você precisa ABRIR O CAIXA antes de registrar vendas.")
 
-    # validate stock
     enriched_items = []
     subtotal = 0.0
     for item in payload.items:
@@ -491,14 +511,12 @@ async def create_sale(payload: SaleIn, user: dict = Depends(get_current_user)):
     }
     await db.sales.insert_one(sale_doc.copy())
 
-    # INCREMENTA O VALOR VENDIDO NA GAVETA CORRETA DO CAIXA
     campo_update = f"total_{payload.payment_method}"
     await db.cash_sessions.update_one(
         {"id": session["id"]},
         {"$inc": {campo_update: total}}
     )
 
-    # decrement stock + create movements
     for item in enriched_items:
         product = await db.products.find_one({"id": item["product_id"]}, {"_id": 0})
         stock_before = float(product.get("stock", 0))
@@ -522,7 +540,6 @@ async def create_sale(payload: SaleIn, user: dict = Depends(get_current_user)):
         await db.stock_movements.insert_one(mov)
     return mongo_to_dict(sale_doc)
 
-
 @api_router.get("/sales", response_model=List[Sale])
 async def list_sales(user: dict = Depends(get_current_user), limit: int = 200):
     docs = await db.sales.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
@@ -535,17 +552,161 @@ async def get_sale(sid: str, user: dict = Depends(get_current_user)):
         raise HTTPException(404, "Venda não encontrada")
     return doc
 
+# ==============================================================================
+# FLUXO DE COMANDAS (BAR)
+# ==============================================================================
+@api_router.post("/comandas", response_model=ComandaOut)
+async def abrir_comanda(payload: ComandaIn, user: dict = Depends(get_current_user)):
+    existe = await db.comandas.find_one({"customer_name": payload.customer_name, "status": "aberta"})
+    if existe:
+        raise HTTPException(status_code=400, detail="Já existe uma comanda aberta com este nome.")
 
-# RELATÓRIO DO HISTÓRICO FINANCEIRO DE SESSÕES DE UM CAIXA ESPECÍFICO
+    comanda_doc = {
+        "id": str(uuid.uuid4()),
+        "customer_name": payload.customer_name,
+        "status": "aberta",
+        "items": [],
+        "total_parcial": 0.0,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.comandas.insert_one(comanda_doc.copy())
+    return mongo_to_dict(comanda_doc)
+
+@api_router.post("/comandas/{comanda_id}/itens")
+async def adicionar_item_comanda(comanda_id: str, payload: ComandaItemIn, user: dict = Depends(get_current_user)):
+    comanda = await db.comandas.find_one({"id": comanda_id, "status": "aberta"})
+    if not comanda:
+        raise HTTPException(status_code=404, detail="Comanda ativa não encontrada")
+
+    product = await db.products.find_one({"id": payload.product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(status_code=404, detail="Produto não encontrado")
+
+    unit_price = float(product.get("price", 0))
+    line_total = round(unit_price * payload.quantity, 2)
+
+    items_atualizados = comanda.get("items", [])
+    item_encontrado = False
+
+    for item in items_atualizados:
+        if item["product_id"] == payload.product_id:
+            item["quantity"] += payload.quantity
+            item["total"] = round(item["quantity"] * item["unit_price"], 2)
+            item_encontrado = True
+            break
+
+    if not item_encontrado:
+        items_atualizados.append({
+            "product_id": payload.product_id,
+            "product_name": product["name"],
+            "barcode": product.get("barcode", ""),
+            "quantity": payload.quantity,
+            "unit_price": unit_price,
+            "total": line_total
+        })
+
+    novo_total_parcial = round(sum(item["total"] for item in items_atualizados), 2)
+
+    await db.comandas.update_one(
+        {"id": comanda_id},
+        {"$set": {"items": items_atualizados, "total_parcial": novo_total_parcial}}
+    )
+    return {"ok": True, "detail": f"Adicionado {payload.quantity}x {product['name']} com sucesso."}
+
+@api_router.get("/comandas", response_model=List[ComandaOut])
+async def listar_comandas_abertas(user: dict = Depends(get_current_user)):
+    docs = await db.comandas.find({"status": "aberta"}).sort("created_at", -1).to_list(1000)
+    return [mongo_to_dict(d) for d in docs]
+
+@api_router.post("/comandas/{comanda_id}/fechar", response_model=Sale)
+async def fechar_e_pagar_comanda(
+    comanda_id: str, 
+    payment_method: Literal["dinheiro", "cartao_debito", "cartao_credito", "pix"],
+    amount_paid: float,
+    discount: float = 0,
+    user: dict = Depends(get_current_user)
+):
+    session = await db.cash_sessions.find_one({"operator_id": user["id"], "status": "aberto"})
+    if not session:
+        raise HTTPException(status_code=400, detail="Bloqueado: Você precisa ABRIR O CAIXA antes de fechar comandas.")
+
+    comanda = await db.comandas.find_one({"id": comanda_id, "status": "aberta"})
+    if not comanda:
+        raise HTTPException(status_code=404, detail="Comanda ativa não encontrada.")
+    
+    if not comanda.get("items"):
+        raise HTTPException(status_code=400, detail="Não é possível fechar uma comanda sem itens consumidos.")
+
+    subtotal = float(comanda["total_parcial"])
+    total = round(subtotal - discount, 2)
+    if total < 0:
+        raise HTTPException(400, "Desconto maior que o subtotal")
+    if payment_method == "dinheiro" and amount_paid < total:
+        raise HTTPException(400, "Valor pago insuficiente")
+    
+    change = round(max(0, amount_paid - total), 2)
+
+    sale_doc = {
+        "id": str(uuid.uuid4()),
+        "items": comanda["items"],
+        "subtotal": subtotal,
+        "discount": discount,
+        "total": total,
+        "payment_method": payment_method,
+        "amount_paid": amount_paid,
+        "change": change,
+        "customer_name": comanda["customer_name"],
+        "operator_id": user["id"],
+        "operator_name": user["name"],
+        "caixa_numero": session["caixa_numero"],  
+        "cash_session_id": session["id"],       
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    
+    await db.sales.insert_one(sale_doc.copy())
+
+    campo_update = f"total_{payment_method}"
+    await db.cash_sessions.update_one(
+        {"id": session["id"]},
+        {"$inc": {campo_update: total}}
+    )
+
+    for item in comanda["items"]:
+        product = await db.products.find_one({"id": item["product_id"]}, {"_id": 0})
+        if product:
+            stock_before = float(product.get("stock", 0))
+            stock_after = stock_before - item["quantity"]
+            
+            await db.products.update_one(
+                {"id": item["product_id"]}, {"$set": {"stock": stock_after}}
+            )
+            
+            mov = {
+                "id": str(uuid.uuid4()),
+                "product_id": item["product_id"],
+                "product_name": item["product_name"],
+                "type": "saida",
+                "quantity": item["quantity"],
+                "reason": f"Comanda Paga - Cliente: {comanda['customer_name']}",
+                "stock_before": stock_before,
+                "stock_after": stock_after,
+                "operator_id": user["id"],
+                "operator_name": user["name"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.stock_movements.insert_one(mov)
+
+    await db.comandas.update_one({"id": comanda_id}, {"$set": {"status": "paga"}})
+    return mongo_to_dict(sale_doc)
+
+# ==============================================================================
+# REPORTS
+# ==============================================================================
 @api_router.get("/reports/cash/{caixa_numero}")
 async def get_cash_report(caixa_numero: int, user: dict = Depends(require_admin)):
     docs = await db.cash_sessions.find({"caixa_numero": caixa_numero}).sort("opened_at", -1).to_list(100)
     return [mongo_to_dict(d) for d in docs]
 
-
-# =========================
-# REPORTS
-# =========================
 @api_router.get("/reports/dashboard")
 async def dashboard(user: dict = Depends(get_current_user)):
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -562,7 +723,6 @@ async def dashboard(user: dict = Depends(get_current_user)):
     total_products = len(products)
     low_stock_count = sum(1 for p in products if p.get("stock", 0) <= p.get("min_stock", 0))
 
-    # last 7 days bucketed
     by_day = {}
     for s in week_sales:
         d = datetime.fromisoformat(s["created_at"]).date().isoformat()
@@ -572,21 +732,21 @@ async def dashboard(user: dict = Depends(get_current_user)):
         d = (datetime.now(timezone.utc) - timedelta(days=i)).date().isoformat()
         series.append({"date": d, "total": round(by_day.get(d, 0), 2)})
 
-    # payment methods
     pay_totals = {}
     for s in today_sales:
         pay_totals[s["payment_method"]] = pay_totals.get(s["payment_method"], 0) + s["total"]
     pay_series = [{"method": k, "total": round(v, 2)} for k, v in pay_totals.items()]
 
-    # top products last 7d
     top = {}
     for s in week_sales:
         for it in s["items"]:
             top[it["product_name"]] = top.get(it["product_name"], 0) + it["quantity"]
+            
     top_products = sorted(
-            [{"name": k, "qty": v} for k, v in top.items()],
-            key=lambda x: x["qty"], reverse=True
-        )[:5]
+        ({"name": k, "qty": v} for k, v in top.items()), 
+        key=lambda x: x["qty"], 
+        reverse=True
+    )[:5]
 
     return {
         "today_revenue": today_revenue,
@@ -599,6 +759,11 @@ async def dashboard(user: dict = Depends(get_current_user)):
         "top_products_7d": top_products,
     }
 
+# ==============================================================================
+# INCLUSÃO DO ROTEADOR
+# ==============================================================================
+# Injeta todas as rotas criadas acima no aplicativo com o CORS ativo
+app.include_router(api_router)
 
 # =========================
 # STARTUP: seed admin + indexes
@@ -631,7 +796,6 @@ async def on_startup():
         )
         logger.info(f"Admin password updated: {admin_email}")
 
-    # seed operator
     op_email = "operador@mercado.com"
     if not await db.users.find_one({"email": op_email}):
         await db.users.insert_one({
@@ -643,31 +807,14 @@ async def on_startup():
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
 
-# AJUSTE: Adicionado o link do Netlify nas origens permitidas do CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://app-6nro.onrender.com",
-        "https://caixamercado.netlify.app", 
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://192.168.10.7:5173"
-    ],  
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(api_router)
-
-
 @app.on_event("shutdown")
 async def on_shutdown():
     client.close()
 
-
+# ==============================================================================
+# EXECUÇÃO DO SERVIDOR
+# ==============================================================================
 if __name__ == "__main__":
     import uvicorn
-    # AJUSTE: O Render gerencia a porta dinamicamente pela variável de ambiente PORT
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
