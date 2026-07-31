@@ -209,6 +209,11 @@ class ComandaItemIn(BaseModel):
 class ComandaIn(BaseModel):
     customer_name: str
 
+class ComandaFechamentoIn(BaseModel):
+    payment_method: Literal["dinheiro", "cartao_debito", "cartao_credito", "pix"]
+    amount_paid: float = Field(..., ge=0)
+    discount: float = Field(default=0, ge=0)
+
 class ComandaItemOut(BaseModel):
     product_id: str
     product_name: str
@@ -573,6 +578,7 @@ async def abrir_comanda(payload: ComandaIn, user: dict = Depends(get_current_use
     return mongo_to_dict(comanda_doc)
 
 @api_router.post("/comandas/{comanda_id}/itens")
+@api_router.post("/comandas/{comanda_id}/items", include_in_schema=False)
 async def adicionar_item_comanda(comanda_id: str, payload: ComandaItemIn, user: dict = Depends(get_current_user)):
     comanda = await db.comandas.find_one({"id": comanda_id, "status": "aberta"})
     if not comanda:
@@ -614,89 +620,151 @@ async def adicionar_item_comanda(comanda_id: str, payload: ComandaItemIn, user: 
     return {"ok": True, "detail": f"Adicionado {payload.quantity}x {product['name']} com sucesso."}
 
 @api_router.get("/comandas", response_model=List[ComandaOut])
+@api_router.get("/comandas/abertas", response_model=List[ComandaOut], include_in_schema=False)
 async def listar_comandas_abertas(user: dict = Depends(get_current_user)):
     docs = await db.comandas.find({"status": "aberta"}).sort("created_at", -1).to_list(1000)
     return [mongo_to_dict(d) for d in docs]
 
 @api_router.post("/comandas/{comanda_id}/fechar", response_model=Sale)
 async def fechar_e_pagar_comanda(
-    comanda_id: str, 
-    payment_method: Literal["dinheiro", "cartao_debito", "cartao_credito", "pix"],
-    amount_paid: float,
-    discount: float = 0,
+    comanda_id: str,
+    payload: ComandaFechamentoIn,
     user: dict = Depends(get_current_user)
 ):
-    session = await db.cash_sessions.find_one({"operator_id": user["id"], "status": "aberto"})
+    session = await db.cash_sessions.find_one(
+        {"operator_id": user["id"], "status": "aberto"}
+    )
     if not session:
-        raise HTTPException(status_code=400, detail="Bloqueado: Você precisa ABRIR O CAIXA antes de fechar comandas.")
+        raise HTTPException(
+            status_code=400,
+            detail="Bloqueado: Você precisa ABRIR O CAIXA antes de fechar comandas."
+        )
 
-    comanda = await db.comandas.find_one({"id": comanda_id, "status": "aberta"})
+    comanda = await db.comandas.find_one(
+        {"id": comanda_id, "status": "aberta"},
+        {"_id": 0}
+    )
     if not comanda:
-        raise HTTPException(status_code=404, detail="Comanda ativa não encontrada.")
-    
-    if not comanda.get("items"):
-        raise HTTPException(status_code=400, detail="Não é possível fechar uma comanda sem itens consumidos.")
+        raise HTTPException(
+            status_code=404,
+            detail="Comanda ativa não encontrada."
+        )
 
-    subtotal = float(comanda["total_parcial"])
-    total = round(subtotal - discount, 2)
+    if not comanda.get("items"):
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível fechar uma comanda sem itens consumidos."
+        )
+
+    subtotal = round(float(comanda.get("total_parcial", 0)), 2)
+    total = round(subtotal - payload.discount, 2)
+
     if total < 0:
-        raise HTTPException(400, "Desconto maior que o subtotal")
-    if payment_method == "dinheiro" and amount_paid < total:
-        raise HTTPException(400, "Valor pago insuficiente")
-    
-    change = round(max(0, amount_paid - total), 2)
+        raise HTTPException(
+            status_code=400,
+            detail="Desconto maior que o subtotal."
+        )
+
+    if payload.payment_method == "dinheiro" and payload.amount_paid < total:
+        raise HTTPException(
+            status_code=400,
+            detail="Valor pago insuficiente."
+        )
+
+    # Valida todos os produtos antes de registrar a venda.
+    # Isso evita criar uma venda e só depois descobrir estoque insuficiente.
+    produtos_validados = []
+
+    for item in comanda["items"]:
+        product = await db.products.find_one(
+            {"id": item["product_id"]},
+            {"_id": 0}
+        )
+
+        if not product:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Produto {item['product_name']} não encontrado."
+            )
+
+        stock_before = float(product.get("stock", 0))
+        quantity = float(item["quantity"])
+
+        if stock_before < quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Estoque insuficiente para {item['product_name']}."
+            )
+
+        produtos_validados.append({
+            "product": product,
+            "item": item,
+            "stock_before": stock_before,
+            "stock_after": stock_before - quantity,
+        })
+
+    change = round(max(0, payload.amount_paid - total), 2)
 
     sale_doc = {
         "id": str(uuid.uuid4()),
         "items": comanda["items"],
         "subtotal": subtotal,
-        "discount": discount,
+        "discount": payload.discount,
         "total": total,
-        "payment_method": payment_method,
-        "amount_paid": amount_paid,
+        "payment_method": payload.payment_method,
+        "amount_paid": payload.amount_paid,
         "change": change,
         "customer_name": comanda["customer_name"],
         "operator_id": user["id"],
         "operator_name": user["name"],
-        "caixa_numero": session["caixa_numero"],  
-        "cash_session_id": session["id"],       
+        "caixa_numero": session["caixa_numero"],
+        "cash_session_id": session["id"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    
+
     await db.sales.insert_one(sale_doc.copy())
 
-    campo_update = f"total_{payment_method}"
+    campo_update = f"total_{payload.payment_method}"
     await db.cash_sessions.update_one(
         {"id": session["id"]},
         {"$inc": {campo_update: total}}
     )
 
-    for item in comanda["items"]:
-        product = await db.products.find_one({"id": item["product_id"]}, {"_id": 0})
-        if product:
-            stock_before = float(product.get("stock", 0))
-            stock_after = stock_before - item["quantity"]
-            
-            await db.products.update_one(
-                {"id": item["product_id"]}, {"$set": {"stock": stock_after}}
-            )
-            
-            mov = {
-                "id": str(uuid.uuid4()),
-                "product_id": item["product_id"],
-                "product_name": item["product_name"],
-                "type": "saida",
-                "quantity": item["quantity"],
-                "reason": f"Comanda Paga - Cliente: {comanda['customer_name']}",
-                "stock_before": stock_before,
-                "stock_after": stock_after,
-                "operator_id": user["id"],
-                "operator_name": user["name"],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await db.stock_movements.insert_one(mov)
+    for dados in produtos_validados:
+        product = dados["product"]
+        item = dados["item"]
+        stock_before = dados["stock_before"]
+        stock_after = dados["stock_after"]
 
-    await db.comandas.update_one({"id": comanda_id}, {"$set": {"status": "paga"}})
+        await db.products.update_one(
+            {"id": item["product_id"]},
+            {"$set": {"stock": stock_after}}
+        )
+
+        mov = {
+            "id": str(uuid.uuid4()),
+            "product_id": item["product_id"],
+            "product_name": item["product_name"],
+            "type": "saida",
+            "quantity": item["quantity"],
+            "reason": f"Comanda Paga - Cliente: {comanda['customer_name']}",
+            "stock_before": stock_before,
+            "stock_after": stock_after,
+            "operator_id": user["id"],
+            "operator_name": user["name"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.stock_movements.insert_one(mov)
+
+    await db.comandas.update_one(
+        {"id": comanda_id, "status": "aberta"},
+        {"$set": {
+            "status": "paga",
+            "closed_at": datetime.now(timezone.utc).isoformat(),
+            "sale_id": sale_doc["id"],
+        }}
+    )
+
     return mongo_to_dict(sale_doc)
 
 # ==============================================================================
