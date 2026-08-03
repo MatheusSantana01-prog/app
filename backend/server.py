@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -888,7 +890,7 @@ if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
 
 
-from fastapi.middleware.cors import CORSMiddleware
+
 
 # Insira a URL do seu frontend no Netlify aqui
 origins = [
