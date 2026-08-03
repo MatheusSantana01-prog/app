@@ -1,9 +1,15 @@
 import axios from 'axios';
 
-// Cria a instância do Axios para se conectar ao backend FastAPI adicionando o prefixo /api
+// 1. Cria a validação para identificar onde o frontend está rodando
+const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+// 2. Substitua o bloco antigo por este:
 export const api = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api', 
+  baseURL: isLocalhost 
+    ? 'http://127.0.0' 
+    : 'https://onrender.com',
 });
+
 
 // Adiciona o token de autenticação em cada requisição automaticamente
 api.interceptors.request.use((config) => {
